@@ -1,133 +1,64 @@
 from fastapi import FastAPI, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 import shutil
 import os
 import cv2
 from ultralytics import YOLO
-from fastapi.staticfiles import StaticFiles
 
-
+# Initialize FastAPI
 app = FastAPI()
 
-# app.mount("/", StaticFiles(directory="build", html=True), name="frontend")
-# app.mount("/static", StaticFiles(directory="static"), name="static")
-app.mount("/", StaticFiles(directory="build", html=True), name="frontend")
-
-
-# CORS for frontend on localhost:3000
+# Enable CORS (adjust origins in production)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], 
+    allow_origins=["*"],  # Replace * with your frontend URL for production
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Load YOLO model
-model = YOLO("best.pt")  # Fixed: just the filename since it's in the same folder
+# Mount static directory for serving annotated images
+app.mount("/static", StaticFiles(directory="static"), name="static")
 
-# Create folders if not exist
-os.makedirs("temp", exist_ok=True)
+# Load YOLOv8 model
+model = YOLO("best.pt")  # Ensure this file is in the root directory and committed
+
+# Ensure static directory exists
 os.makedirs("static", exist_ok=True)
+
 
 @app.post("/predict")
 async def predict(file: UploadFile = File(...)):
-    # Save uploaded file to temp/
-    file_location = f"temp/{file.filename}"
-    with open(file_location, "wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
+    try:
+        # Save uploaded file to disk
+        file_path = f"static/{file.filename}"
+        with open(file_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
 
-    # Check valid image format
-    if not file.filename.lower().endswith((".jpg", ".jpeg", ".png")):
-        return JSONResponse(content={"disease": "Invalid image format ❌"}, status_code=400)
+        # Read image using OpenCV
+        image = cv2.imread(file_path)
 
-    # Predict
-    results = model.predict(source=file_location, save=False)
-    annotated_img = results[0].plot()
+        # Predict using YOLOv8
+        results = model.predict(image)
 
-    # Save annotated image
-    annotated_path = f"static/annotated_{file.filename}"
-    cv2.imwrite(annotated_path, annotated_img[:, :, ::-1])  # RGB → BGR
+        # Annotate and save the image
+        for r in results:
+            annotated_frame = r.plot()
+            annotated_filename = f"static/annotated_{file.filename}"
+            cv2.imwrite(annotated_filename, annotated_frame)
 
-    # Get class names
-    boxes = results[0].boxes
-    if boxes:
-        detected_labels = [results[0].names[int(box.cls)] for box in boxes]
-        disease_summary = ", ".join(set(detected_labels))
-    else:
-        disease_summary = "No disease detected"
+        # Return annotated image URL
+        return JSONResponse(
+            content={
+                "message": "Prediction successful",
+                "annotated_image_url": f"https://final-sugarcane-leaf-disease-detector.onrender.com/static/annotated_{file.filename}"
+            }
+        )
 
-    return JSONResponse(
-        content={
-            "disease": disease_summary,
-             "annotated_image_url": f"https://sugarcane-leaf-disease-detector.onrender.com/static/annotated_{file.filename}"
-        }
-    )
-
-# Serve static files
-app.mount("/static", StaticFiles(directory="static"), name="static")
-
-
-# from fastapi import FastAPI, UploadFile, File
-# from fastapi.middleware.cors import CORSMiddleware
-# from fastapi.responses import JSONResponse
-# from fastapi.staticfiles import StaticFiles
-# import shutil
-# import os
-# import cv2
-# from ultralytics import YOLO
-
-# app = FastAPI()
-
-# # Allow all origins (adjust in production!)
-# app.add_middleware(
-#     CORSMiddleware,
-#     allow_origins=["*"],
-#     allow_methods=["*"],
-#     allow_headers=["*"],
-# )
-
-# # Load YOLO model (relative path)
-# model = YOLO("best.pt")  # Place the model in a `models/` folder
-
-# # Create folders
-# os.makedirs("temp", exist_ok=True)
-# os.makedirs("static", exist_ok=True)
-
-# @app.post("/predict")
-# async def predict(file: UploadFile = File(...)):
-#     # Save uploaded file
-#     file_location = f"temp/{file.filename}"
-#     with open(file_location, "wb") as buffer:
-#         shutil.copyfileobj(file.file, buffer)
-
-#     # Validate image
-#     if not file.filename.lower().endswith((".jpg", ".jpeg", ".png")):
-#         return JSONResponse(content={"error": "Invalid image format"}, status_code=400)
-
-#     # Predict
-#     results = model.predict(source=file_location, save=False)
-#     annotated_img = results[0].plot()
-
-#     # Save annotated image
-#     annotated_path = f"static/annotated_{file.filename}"
-#     cv2.imwrite(annotated_path, annotated_img[:, :, ::-1])  # RGB → BGR
-
-#     # Get predictions
-#     boxes = results[0].boxes
-#     disease_summary = (
-#         ", ".join({results[0].names[int(box.cls)] for box in boxes})
-#         if boxes else "No disease detected"
-#     )
-
-#     return JSONResponse(
-#         content={
-#             "disease": disease_summary,
-#             "annotated_image_url": f"/static/annotated_{file.filename}"  # Relative path!
-#         }
-#     )
-
-# # Serve static files
-# app.mount("/static", StaticFiles(directory="static"), name="static")
+    except Exception as e:
+        return JSONResponse(
+            content={"message": f"Prediction failed: {str(e)}"},
+            status_code=500
+        )
