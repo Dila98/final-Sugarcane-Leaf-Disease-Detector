@@ -18,6 +18,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+# Ensure static directory exists
+os.makedirs("static", exist_ok=True)
 
 # Mount static directory for serving annotated images
 app.mount("/static", StaticFiles(directory="static"), name="static")
@@ -25,8 +27,7 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 # Load YOLOv8 model
 model = YOLO("best.pt")  # Ensure this file is in the root directory and committed
 
-# Ensure static directory exists
-os.makedirs("static", exist_ok=True)
+
 
 
 @app.post("/predict")
